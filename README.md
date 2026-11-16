@@ -4,7 +4,19 @@ Sistema para transformar vídeos gravados no celular em vídeos verticais pronto
 
 Segue a mesma lógica do [Estúdio de Canais](https://github.com/MullerDeFranca/estudio-de-canais): um **plano de edição** em JSON descreve o vídeo e um **motor** em Python + ffmpeg faz a renderização.
 
-## Fluxo de um vídeo
+## Página do Estúdio (tudo no navegador)
+
+Artefato: [Estúdio de Edição](https://claude.ai/artifact/Q8dK7BdsiQquCn8y7dGpTX). Código em `estudio/`.
+
+1. Enviar o vídeo (fica só no computador).
+2. A fala é transcrita no próprio navegador (Whisper base).
+3. Marcar cada trecho: manter, cortar ou destacar; corrigir a legenda se precisar.
+4. Direção: tom, descrição do humor, o que quer e o que não quer, trilha opcional.
+5. **Começar a edição com o Claude**: cortes, correções da legenda, palavras em destaque, grafismos, zooms, legenda do post, hashtags e comentário fixado.
+6. Revisar na prévia 9:16, tirar o que não gostar ou pedir ajuste.
+7. **Exportar** em 1080×1920 (gravação em tempo real) e baixar o vídeo e o texto do post.
+
+## Fluxo pelo motor em Python
 
 1. Colocar o vídeo bruto em `bruto/`.
 2. Transcrever: `python3 motor/transcrever.py bruto/video.mp4` → `bruto/video.transcricao.json`.
