@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+motor/saida/
+motor/models/
+bruto/
+*.mp4
+*.mov
+*.wav
+*.mp3
+!motor/trilhas/*.mp3

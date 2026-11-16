@@ -1,0 +1,4 @@
+# transcrição com marcação de tempo por palavra (roda na CPU)
+faster-whisper
+# próximos passos: recorte da pessoa para grafismos atrás dela
+# onnxruntime-directml   # aceleração na placa AMD no Windows

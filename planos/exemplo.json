@@ -1,0 +1,24 @@
+{
+  "id": "exemplo",
+  "video": "../bruto/exemplo.mp4",
+  "transcricao": "../bruto/exemplo.transcricao.json",
+  "cortes": [[0.4, 12.8], [13.6, 41.0]],
+  "legenda": {
+    "fonte": "Anton",
+    "tamanho": 92,
+    "cor": "#FFFFFF",
+    "cor_destaque": "#FFD400",
+    "posicao": 0.70,
+    "palavras_por_bloco": 3,
+    "maiusculas": true
+  },
+  "graficos": [
+    {"t0_bruto": 2.1, "t1_bruto": 4.0, "texto": "3 erros", "entrada": "esquerda", "posicao": 0.22, "camada": "atras"},
+    {"t0_bruto": 18.5, "t1_bruto": 21.0, "texto": "+40% de vendas", "entrada": "direita", "posicao": 0.22}
+  ],
+  "trilha": {"arquivo": "../trilhas/leve.mp3", "volume": 0.2},
+  "post": {
+    "legenda": "Três erros que travam suas vendas no Instagram (e como resolver cada um).",
+    "hashtags": ["#marketingdigital", "#instagram", "#vendas"]
+  }
+}
