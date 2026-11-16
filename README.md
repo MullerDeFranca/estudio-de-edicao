@@ -13,8 +13,10 @@ Artefato: [Estúdio de Edição](https://claude.ai/artifact/Q8dK7BdsiQquCn8y7dGp
 3. Marcar cada trecho: manter, cortar ou destacar; corrigir a legenda se precisar.
 4. Direção: tom, descrição do humor, o que quer e o que não quer, trilha opcional.
 5. **Começar a edição com o Claude**: cortes, correções da legenda, palavras em destaque, grafismos, zooms, legenda do post, hashtags e comentário fixado.
-6. Revisar na prévia 9:16, tirar o que não gostar ou pedir ajuste.
-7. **Exportar** em 1080×1920 (gravação em tempo real) e baixar o vídeo e o texto do post.
+6. Revisar na prévia 9:16, tirar o que não gostar, trocar de versão (completa, 30 s, 15 s) ou pedir ajuste.
+7. **Exportar** em 1080×1920 (gravação em tempo real) e baixar o vídeo, o texto do post e a capa.
+
+Recursos: gancho na abertura, cortes de câmera (plano aberto/fechado), efeitos de humor (pausa congelada dramática ou com grilo, tremor, P&B, vinheta), barra de progresso, emoji na legenda, limpeza de muletas, correção de luz e cor, grafismos atrás da pessoa (recorte com MediaPipe), biblioteca de sons e logos e presets por cliente (guardados no banco do artefato), ditado por voz, marca d'água, tela final com @ e chamada, versões curtas e capa.
 
 ## Fluxo pelo motor em Python
 

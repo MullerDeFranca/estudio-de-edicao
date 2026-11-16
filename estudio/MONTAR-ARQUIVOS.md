@@ -22,3 +22,16 @@ done
 
 Cada arquivo publicado precisa ter menos de 20 MiB, por isso as partes. O `transcritor.js` remonta as partes
 (quantidade em `PARTES`). A extensão `.wasm` é só para o servidor do artefato aceitar o arquivo.
+
+## Recorte da pessoa (MediaPipe Selfie Segmentation, Apache-2.0)
+
+```bash
+npm pack @mediapipe/selfie_segmentation@0.1.1675465747 && tar xzf mediapipe-selfie_segmentation-*.tgz
+mkdir -p mp && cp package/*.js mp/
+for f in selfie_segmentation.binarypb selfie_segmentation.tflite selfie_segmentation_landscape.tflite \
+         selfie_segmentation_solution_simd_wasm_bin.wasm selfie_segmentation_solution_wasm_bin.wasm; do
+  cp package/$f mp/$f.wasm
+done
+```
+
+O `app.js` carrega com `locateFile: f => "mp/" + (f.endsWith(".js") ? f : f + ".wasm")`. O arquivo `.data` (vazio) não é necessário.
