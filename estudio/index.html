@@ -159,6 +159,21 @@ select.sel { background: var(--painel-2); border: 1px solid var(--linha); border
 .analise-resumo p { margin: 0; }
 .lista-analise { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
 .lista-analise .tempo { font-size: 12px; color: var(--azul); background: none; border: 0; padding: 0; cursor: pointer; font-variant-numeric: tabular-nums; }
+.txt-box { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.trecho textarea.txt { min-height: 0; background: transparent; border: 1px solid transparent; border-radius: 5px; padding: 3px 6px; margin: -3px -6px; resize: none; overflow: hidden; line-height: 1.45; width: calc(100% + 12px); }
+.trecho textarea.txt:hover { border-color: var(--linha); }
+.trecho textarea.txt:focus { background: #2a2e34; border-color: var(--tally); outline: none; }
+.voz-info { font-size: 11.5px; color: var(--apagado); font-variant-numeric: tabular-nums; }
+.voz-info.outra { color: #9fb7ff; }
+.trecho.outra { border-left-color: #6f86d6; opacity: .6; }
+.trecho.outra textarea.txt { text-decoration: line-through; text-decoration-color: rgba(111,134,214,.8); }
+.marcas button[aria-pressed="true"][data-m="outra"] { background: #232b45; color: #9fb7ff; }
+.leg-editor { width: min(100%, calc(min(68vh, 760px) * 9 / 16 + 60px)); background: var(--painel); border: 1px solid var(--linha); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.leg-editor .linha-botoes { justify-content: space-between; }
+.leg-titulo { font-size: 12.5px; font-weight: 600; }
+.leg-titulo span { font-weight: 400; color: var(--apagado); }
+.leg-editor textarea { min-height: 52px; font-size: 14px; }
+.monitor { overflow-y: auto; justify-content: flex-start; }
 .sub-etapa { border-top: 1px solid var(--linha); padding-top: 12px; display: flex; flex-direction: column; gap: 10px; }
 </style>
 </head>
@@ -191,11 +206,12 @@ select.sel { background: var(--painel-2); border: 1px solid var(--linha); border
       </div>
       <p class="dica" id="trans-vazio">Assim que o vídeo entrar, a fala é transcrita aqui mesmo no navegador. Na primeira vez o modelo de transcrição (cerca de 100 MB) leva um tempinho para carregar.</p>
       <div id="trans-pronto" hidden>
-        <p class="dica">Marque cada trecho: <b>Cortar</b> o que não deve entrar, <b>Destacar</b> o que merece grafismo ou zoom. Clique no texto para corrigir a legenda e no tempo para ver no monitor.</p>
+        <p class="dica">Marque cada trecho: <b>Cortar</b> o que não deve entrar, <b>Destacar</b> o que merece grafismo ou zoom. <b>Outra voz</b> tira falas de outras pessoas e ruídos. Clique no texto para corrigir a legenda e no tempo para ver no monitor.</p>
         <div class="legenda-marcas">
           <span style="--c: var(--ok)">Manter</span>
           <span style="--c: var(--corte)">Cortar</span>
           <span style="--c: var(--tally)">Destacar</span>
+          <span style="--c: #6f86d6">Outra voz / ruído</span>
           <span style="--c: #b46cff">Cortado pelo Claude</span>
         </div>
         <div class="trechos" id="trechos"></div>
@@ -254,13 +270,26 @@ select.sel { background: var(--painel-2); border: 1px solid var(--linha); border
         <label class="check"><input type="checkbox" id="op-gancho" checked><span>Gancho na abertura<small>Repete a frase mais forte nos primeiros segundos.</small></span></label>
         <label class="check"><input type="checkbox" id="op-camera" checked><span>Cortes de câmera<small>Alterna plano aberto e fechado a cada frase.</small></span></label>
         <label class="check"><input type="checkbox" id="op-humor" checked><span>Efeitos de humor<small>Pausa dramática, tremor, P&amp;B, silêncio com grilo.</small></span></label>
-        <label class="check"><input type="checkbox" id="op-silencio" checked><span>Cortar silêncios<small>Tira as pausas entre as frases.</small></span></label>
+        <label class="check"><input type="checkbox" id="op-silencio" checked><span>Cortar silêncios<small>Mede o áudio de verdade: só sai o que não tem voz.</small></span></label>
+        <label class="check"><input type="checkbox" id="op-vozprincipal" checked><span>Só a voz principal<small>Tira falas de outras pessoas e ruídos que viraram trecho.</small></span></label>
+        <label class="check"><input type="checkbox" id="op-ruido" checked><span>Reduzir ruído<small>Abaixa o som de fundo entre as falas e filtra chiado.</small></span></label>
         <label class="check"><input type="checkbox" id="op-muletas" checked><span>Limpar muletas<small>Tira "né", "tipo", "ahn" da legenda e corta trechos só de enrolação.</small></span></label>
         <label class="check"><input type="checkbox" id="op-sfx" checked><span>Efeitos sonoros<small>Os embutidos e os da sua biblioteca.</small></span></label>
         <label class="check"><input type="checkbox" id="op-emoji" checked><span>Emoji na legenda<small>Nas palavras-chave, sem exagero.</small></span></label>
         <label class="check"><input type="checkbox" id="op-barra" checked><span>Barra de progresso<small>Linha fina no topo do vídeo.</small></span></label>
         <label class="check"><input type="checkbox" id="op-atras"><span>Grafismos atrás de mim<small>Recorta você do fundo (usa mais o computador).</small></span></label>
         <label class="check"><input type="checkbox" id="op-luz" checked><span>Corrigir luz e cor<small>Ajuste automático de brilho, contraste e cor.</small></span></label>
+      </div>
+
+      <div class="sub-etapa">
+        <p class="sub">Ajuste dos cortes</p>
+        <div class="grade-2">
+          <div class="campo"><label for="aj-pausa">Pausa mínima para cortar <span id="aj-pausa-v"></span></label><input type="range" id="aj-pausa" min="0.15" max="1.2" step="0.05" value="0.35"><span class="dica">Menor = vídeo mais corrido.</span></div>
+          <div class="campo"><label for="aj-respiro">Respiro antes e depois da fala <span id="aj-respiro-v"></span></label><input type="range" id="aj-respiro" min="0.03" max="0.4" step="0.01" value="0.12"><span class="dica">Aumente se o começo ou o fim das palavras estiver sendo comido.</span></div>
+          <div class="campo"><label for="aj-sens">O que conta como voz <span id="aj-sens-v"></span></label><input type="range" id="aj-sens" min="0.15" max="0.5" step="0.01" value="0.3"><span class="dica">Mais à direita ignora vozes baixas e barulho de fundo.</span></div>
+          <div class="campo"><label>&nbsp;</label><div class="linha-botoes"><button class="btn" type="button" id="aj-ouvir">Ouvir do começo</button><button class="btn mini" type="button" id="aj-padrao">Voltar ao padrão</button></div></div>
+        </div>
+        <p class="dica" id="aj-resumo"></p>
       </div>
 
       <div class="sub-etapa">
@@ -325,6 +354,7 @@ select.sel { background: var(--painel-2); border: 1px solid var(--linha); border
 
       <div id="plano-box" hidden>
         <div class="resumo-plano" id="resumo-plano"></div>
+        <button class="btn mini" type="button" id="btn-restaurar-cortes" hidden>Desfazer todos os cortes do Claude</button>
         <div class="campo">
           <label>Versão</label>
           <div class="versoes" id="versoes"></div>
@@ -392,6 +422,14 @@ select.sel { background: var(--painel-2); border: 1px solid var(--linha); border
         <span class="tempo-total" id="tempo">0:00 / 0:00</span>
       </div>
     </div>
+    <div class="leg-editor" id="leg-editor" hidden>
+      <div class="linha-botoes">
+        <label for="leg-texto" class="leg-titulo">Legenda <span id="leg-tempo"></span></label>
+        <span class="linha-botoes"><button class="btn mini" type="button" id="leg-ant" aria-label="Trecho anterior">◀</button><button class="btn mini" type="button" id="leg-prox" aria-label="Próximo trecho">▶</button></span>
+      </div>
+      <textarea id="leg-texto" rows="2" spellcheck="true"></textarea>
+      <label class="check"><input type="checkbox" id="leg-oculta"><span>Esconder a legenda deste trecho</span></label>
+    </div>
     <div class="estilo-leg">
       <div class="campo">
         <label for="leg-fonte">Fonte da legenda</label>
@@ -408,6 +446,10 @@ select.sel { background: var(--painel-2); border: 1px solid var(--linha); border
       <div class="campo">
         <label for="leg-pos">Altura da legenda</label>
         <input type="range" id="leg-pos" min="0.5" max="0.85" step="0.01" value="0.68">
+      </div>
+      <div class="campo">
+        <label for="leg-bloco">Palavras por vez</label>
+        <select id="leg-bloco"><option value="1">1</option><option value="2">2</option><option value="3" selected>3</option><option value="4">4</option></select>
       </div>
       <label class="check" style="align-self:end"><input type="checkbox" id="leg-caixa" checked><span>Caixa alta</span></label>
     </div>

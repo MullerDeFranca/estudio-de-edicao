@@ -8,13 +8,15 @@ const $ = (id) => document.getElementById(id);
 const TONS = ["Humor ácido", "Humor leve", "Sarcástico", "Absurdo", "Autodepreciativo", "Informativo", "Motivacional", "Sério"];
 const CORES = ["#FFD400", "#38E07B", "#FF4FA3", "#4FD2FF", "#FF7A1A", "#FFFFFF"];
 const SONS_EMBUTIDOS = ["pop", "whoosh", "ding", "boom", "grilo"];
-const OPCOES = ["op-gancho", "op-camera", "op-humor", "op-silencio", "op-muletas", "op-sfx", "op-emoji", "op-barra", "op-atras", "op-luz", "op-final"];
+const OPCOES = ["op-gancho", "op-camera", "op-humor", "op-silencio", "op-vozprincipal", "op-ruido", "op-muletas", "op-sfx", "op-emoji", "op-barra", "op-atras", "op-luz", "op-final"];
+const AJUSTES = { "aj-pausa": 0.35, "aj-respiro": 0.12, "aj-sens": 0.3 };
 const st = {
   arquivo: null, chave: null, dur: 0, vw: 0, vh: 0,
   segs: [],            // {id, t0, t1, texto, marca}
   plano: null,
   versao: "completa",
-  estilo: { fonte: "Anton", destaque: "#FFD400", posicao: 0.68, caixa: true },
+  estilo: { fonte: "Anton", destaque: "#FFD400", posicao: 0.68, caixa: true, porBloco: 3 },
+  audio: null,         // análise do áudio: energia e tom por quadro de 20 ms
   tons: new Set(),
   musicaUrl: null,
   luz: { brilho: 1, contraste: 1, saturacao: 1.08 },
@@ -56,6 +58,7 @@ function lerDirecao() {
     tons: [...st.tons], tomLivre: $("tom-livre").value, quero: $("quero").value, naoQuero: $("nao-quero").value,
     opcoes: o, estilo: { ...st.estilo }, logoId: st.logoId, logoPos: $("logo-pos").value, logoOpac: $("logo-opac").value,
     arroba: $("final-arroba").value, chamada: $("final-chamada").value,
+    ajustes: Object.fromEntries(Object.keys(AJUSTES).map((id) => [id, parseFloat($(id).value)])),
   };
 }
 function aplicarDirecao(d) {
@@ -69,6 +72,8 @@ function aplicarDirecao(d) {
   if (d.logoOpac) $("logo-opac").value = d.logoOpac;
   if (d.arroba !== undefined) $("final-arroba").value = d.arroba;
   if (d.chamada !== undefined) $("final-chamada").value = d.chamada;
+  if (d.ajustes) for (const id of Object.keys(AJUSTES)) if (typeof d.ajustes[id] === "number") $(id).value = d.ajustes[id];
+  mostrarAjustes();
   desenharChips(); sincronizarEstiloUI(); desenharLogos();
 }
 function salvarLocal() {
@@ -85,11 +90,12 @@ function lerLocal(chave) { try { return JSON.parse(localStorage.getItem(chave) |
   if (sample) { try { sampleImagens = !!(await sample.limits())?.images; } catch { sampleImagens = false; } }
   if (ditado) prepararDitado();
   if (db) assinarBiblioteca();
-  if (sample && st.segs.length && !st.analise && !st.analisando) analisarVideo();
   else {
-    ["msg-som", "msg-logo"].forEach((id) => $(id).textContent = "A biblioteca só funciona no app do Claude.");
-    ["btn-som", "btn-logo", "btn-salvar-preset"].forEach((id) => $(id).disabled = true);
+    ["msg-som", "msg-logo"].forEach((id) => $(id).textContent = "A biblioteca de sons e logos só funciona no app do Claude.");
+    ["btn-som", "btn-logo"].forEach((id) => $(id).disabled = true);
   }
+  carregarPresetsLocais();
+  if (sample && st.segs.length && !st.analise && !st.analisando) analisarVideo();
   atualizarBotoes();
 })();
 
@@ -104,7 +110,7 @@ async function carregarVideo(f) {
   pararReproducao();
   mostrar($("erro-video"), "");
   st.arquivo = f; st.chave = `estudio-edicao:${f.name}:${f.size}`;
-  st.segs = []; st.plano = null; st.videoBlob = null; st.versao = "completa"; st.analise = null; st.quadrosAnalise = null;
+  st.segs = []; st.plano = null; st.videoBlob = null; st.versao = "completa"; st.analise = null; st.quadrosAnalise = null; st.audio = null;
   mostrarAnalise();
   $("exp-acoes").hidden = true; mostrar($("exp-msg"), ""); $("plano-box").hidden = true;
   if (video.src) URL.revokeObjectURL(video.src);
@@ -134,6 +140,7 @@ async function carregarVideo(f) {
     recalcular(); mostrarTrechos(); if (st.plano) mostrarPlano(); atualizarBotoes();
     $("est-trans").textContent = "Recuperado da última sessão";
     await irPara(0);
+    garantirAudio();
     return;
   }
   recalcular(); desenharTela();
@@ -185,6 +192,9 @@ async function transcrever() {
   let audio;
   try { audio = await audio16k(st.arquivo); }
   catch { $("trans-status").textContent = "Não consegui ler o áudio deste vídeo. Confira se ele tem som e está em MP4."; return; }
+  $("trans-status").textContent = "Analisando o áudio (voz, silêncios e ruído)…";
+  await espera(30);
+  st.audio = analisarAudio(audio);
   if (!worker) worker = new Worker("transcritor.js", { type: "module" });
   const inicio = performance.now();
   st.quadrosAnalise = capturarQuadros(6); // análise visual em paralelo à transcrição
@@ -199,6 +209,7 @@ async function transcrever() {
     if (m.tipo === "erro") { $("trans-status").textContent = "A transcrição falhou: " + m.texto; $("est-trans").textContent = "Erro"; }
     if (m.tipo === "pronto") {
       st.segs = limparSegmentos(m.segmentos).map((s, i) => ({ id: i + 1, t0: s.t0, t1: s.t1, texto: s.texto, marca: "manter" }));
+      classificarVozes(true);
       $("trans-progresso").hidden = true;
       if (!st.segs.length) { $("trans-vazio").hidden = false; $("trans-vazio").textContent = "Não encontrei fala neste vídeo."; return; }
       recalcular(); mostrarTrechos(); salvarLocal(); atualizarBotoes(); irPara(0);
@@ -232,14 +243,15 @@ function mostrarTrechos() {
     el.className = "trecho " + s.marca + (s.marca === "manter" && cortClaude.has(s.id) ? " cortado-claude" : "");
     el.dataset.id = s.id;
     el.innerHTML = `<button class="tempo" type="button" title="Ver no monitor">${fmtD(s.t0)}</button>
-      <div class="txt" contenteditable="true" spellcheck="true"></div>
+      <div class="txt-box"><textarea class="txt" rows="1" spellcheck="true" aria-label="Legenda do trecho"></textarea>${s.voz ? `<span class="voz-info${s.voz.outra ? " outra" : ""}">${s.voz.outra ? "outra voz? " : ""}${s.voz.rel > 0 ? "+" : ""}${s.voz.rel.toFixed(0)} dB</span>` : ""}</div>
       <div class="marcas" role="group" aria-label="Marcação do trecho">
-        <button type="button" data-m="manter">Manter</button><button type="button" data-m="cortar">Cortar</button><button type="button" data-m="destacar">Destacar</button>
+        <button type="button" data-m="manter">Manter</button><button type="button" data-m="cortar">Cortar</button><button type="button" data-m="outra">Outra voz</button><button type="button" data-m="destacar">Destacar</button>
       </div>`;
-    el.querySelector(".txt").textContent = s.texto;
+    const ta = el.querySelector(".txt"); ta.value = s.texto;
+    requestAnimationFrame(() => crescer(ta));
     el.querySelectorAll(".marcas button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.m === s.marca)));
     el.querySelector(".tempo").onclick = () => irParaBruto(s.t0 + 0.01);
-    el.querySelector(".txt").addEventListener("input", (ev) => { s.texto = ev.target.textContent.trim(); recalcular(); salvarLocal(); desenharTela(); });
+    ta.addEventListener("input", () => { s.texto = ta.value.replace(/\s+/g, " ").trim(); s.editado = true; crescer(ta); recalcular(); salvarLocal(); desenharTela(); sincronizarLegendaAtual(true); });
     el.querySelectorAll(".marcas button").forEach((b) => b.onclick = () => {
       s.marca = b.dataset.m;
       if (st.plano && s.marca !== "manter") st.plano.cortar_segmentos = (st.plano.cortar_segmentos || []).filter((x) => x !== s.id);
@@ -255,6 +267,7 @@ function mostrarTrechos() {
 let palavras = [], blocos = [], pecas = [], inicioPeca = [], durEditada = 0, intervalos = [];
 const MULETAS = new Set(["ahn", "an", "hum", "hmm", "eh", "ehh", "ee", "aa", "ah"]);
 
+const cortado = (s, cortC) => s.marca === "cortar" || (s.marca === "outra" && op("op-vozprincipal")) || (s.marca === "manter" && cortC.has(s.id));
 function cortesClaude() {
   const ids = new Set(st.plano?.cortar_segmentos || []);
   const v = st.plano?.versoes?.[st.versao];
@@ -262,31 +275,60 @@ function cortesClaude() {
   return ids;
 }
 
+// palavras distribuídas só pelos momentos com voz (não caem nas pausas que serão cortadas)
 function quebrarPalavras(s) {
+  if (s.semLegenda) return [];
   let ps = s.texto.split(/\s+/).filter(Boolean);
   if (op("op-muletas")) ps = ps.filter((p) => !MULETAS.has(normal(p)));
+  if (!ps.length) return [];
   const pesos = ps.map((p) => p.length + 2);
   const tot = pesos.reduce((a, b) => a + b, 0) || 1;
-  const d = s.t1 - s.t0;
-  let t = s.t0;
-  return ps.map((p, i) => { const dd = d * pesos[i] / tot; const w = { t0: t, t1: t + dd, p, seg: s.id }; t += dd; return w; });
+  const a0 = s.a ?? s.t0, b0 = s.b ?? s.t1;
+  const A = st.audio;
+  let trechos = [[a0, b0]];
+  if (A) {
+    const lim = limiarVoz(); trechos = []; let ini = null;
+    const i0 = Math.max(0, Math.floor(a0 / A.hop)), i1 = Math.min(A.db.length, Math.ceil(b0 / A.hop));
+    for (let i = i0; i <= i1; i++) {
+      const voz = i < i1 && A.db[i] > lim;
+      if (voz && ini === null) ini = i; else if (!voz && ini !== null) { trechos.push([ini * A.hop, i * A.hop]); ini = null; }
+    }
+    if (!trechos.length) trechos = [[a0, b0]];
+  }
+  const total = trechos.reduce((n, [x, y]) => n + y - x, 0);
+  const mapear = (u) => { let r = u * total; for (const [x, y] of trechos) { if (r <= y - x) return x + r; r -= y - x; } return trechos[trechos.length - 1][1]; };
+  return ps.map((p, i) => {
+    const u0 = pesos.slice(0, i).reduce((x, y) => x + y, 0) / tot, u1 = u0 + pesos[i] / tot;
+    const c = mapear((u0 + u1) / 2);
+    let t0 = mapear(u0 + 1e-4), t1 = mapear(u1 - 1e-4);
+    const r = trechos.find(([x, y]) => c >= x && c <= y);
+    if (r) { t0 = clamp(t0, r[0], c); t1 = clamp(t1, c, r[1]); } // não deixa a palavra atravessar uma pausa
+    return { t0, t1: Math.max(t1, t0 + 0.08), c, p, seg: s.id };
+  });
 }
 
 function recalcular() {
   const removidos = [];
   const cortC = cortesClaude();
   const ativos = [];
+  ajustarLimites();
   for (const s of st.segs) {
-    if (s.marca === "cortar" || (s.marca === "manter" && cortC.has(s.id))) removidos.push([s.t0, s.t1]);
+    if (cortado(s, cortC)) removidos.push([s.a ?? s.t0, s.b ?? s.t1]);
     else ativos.push(s);
   }
   if (op("op-silencio") && ativos.length) {
-    const m = 0.18;
-    const ord = [...ativos].sort((a, b) => a.t0 - b.t0);
-    if (ord[0].t0 - m > 0.05) removidos.push([0, ord[0].t0 - m]);
-    for (let i = 0; i + 1 < ord.length; i++) { const a = ord[i].t1 + m, b = ord[i + 1].t0 - m; if (b - a > 0.25) removidos.push([a, b]); }
-    const fim = ord[ord.length - 1].t1 + 0.45;
-    if (st.dur - fim > 0.05) removidos.push([fim, st.dur]);
+    // mantém só as regiões com fala dos trechos ativos; tudo fora delas (silêncio, ruído, outras vozes) sai
+    const m = parseFloat($("aj-respiro").value), pmin = parseFloat($("aj-pausa").value);
+    const falas = [];
+    for (const s of ativos) for (const r of regioesDeFala(s.a ?? s.t0, s.b ?? s.t1, pmin)) falas.push([...r]);
+    falas.sort((x, y) => x[0] - y[0]);
+    const brutas = [];
+    for (const f of falas) { const u = brutas[brutas.length - 1]; if (u && f[0] - u[1] < pmin) u[1] = Math.max(u[1], f[1]); else brutas.push([...f]); }
+    const juntas = [];
+    for (const [x, y] of brutas) { const f = [Math.max(0, x - m), Math.min(st.dur, y + m)]; const u = juntas[juntas.length - 1]; if (u && f[0] <= u[1]) u[1] = Math.max(u[1], f[1]); else juntas.push(f); }
+    let t = 0;
+    for (const [a, b] of juntas) { if (a - t > 0.04) removidos.push([t, a]); t = Math.max(t, b); }
+    if (st.dur - t > 0.04) removidos.push([t, st.dur]);
   }
   removidos.sort((a, b) => a[0] - b[0]);
   const uniao = [];
@@ -313,8 +355,8 @@ function recalcular() {
   // legendas: palavras de trechos que aparecem em algum clipe
   const emClipe = (x) => pecas.some((p) => p.tipo === "clip" && x >= p.a && x < p.b);
   palavras = [];
-  const usuarioCortou = new Set(st.segs.filter((s) => s.marca === "cortar").map((s) => s.id));
-  for (const s of st.segs) if (!usuarioCortou.has(s.id)) for (const w of quebrarPalavras(s)) if (emClipe(w.t0 + 0.02)) palavras.push(w);
+  const usuarioCortou = new Set(st.segs.filter((s) => s.marca === "cortar" || (s.marca === "outra" && op("op-vozprincipal"))).map((s) => s.id));
+  for (const s of st.segs) if (!usuarioCortou.has(s.id)) for (const w of quebrarPalavras(s)) if (emClipe(w.c ?? (w.t0 + w.t1) / 2)) palavras.push(w);
   palavras.sort((a, b) => a.t0 - b.t0);
   blocos = [];
   let atual = [];
@@ -322,7 +364,7 @@ function recalcular() {
     atual.push(w);
     const prox = palavras[i + 1];
     const chars = atual.reduce((n, x) => n + x.p.length + 1, 0);
-    if (atual.length >= 3 || chars > 16 || /[.!?…,]$/.test(w.p) || !prox || prox.t0 - w.t1 > 0.4 || prox.seg !== w.seg) { blocos.push(atual); atual = []; }
+    if (atual.length >= (st.estilo.porBloco || 3) || chars > 6 + 5 * (st.estilo.porBloco || 3) || /[.!?…,]$/.test(w.p) || !prox || prox.t0 - w.t1 > 0.4 || prox.seg !== w.seg) { blocos.push(atual); atual = []; }
   });
   blocos.forEach((b, i) => { b.ini = b[0].t0; b.fim = Math.min(b[b.length - 1].t1 + 0.15, blocos[i + 1] ? blocos[i + 1][0].t0 : Infinity); });
   // planos de câmera: alterna por trecho
@@ -330,6 +372,8 @@ function recalcular() {
   for (const s of [...st.segs].sort((a, b) => a.t0 - b.t0)) if (!usuarioCortou.has(s.id) && !cortC.has(s.id)) ordemSeg.set(s.id, k++);
   st.planoSeg = ordemSeg;
   if (eng.idx >= pecas.length) eng.idx = Math.max(0, pecas.length - 1);
+  const cortadoS = st.dur - (pecas.filter((p) => p.tipo === "clip" && !p.gancho).reduce((n, p) => n + p.b - p.a, 0));
+  $("aj-resumo").textContent = st.segs.length ? `Do bruto de ${fmt(st.dur)}, saem ${cortadoS.toFixed(1)} s (silêncios, ruídos, outras vozes e cortes marcados).` : "";
   atualizarTempo();
 }
 
@@ -457,6 +501,7 @@ async function passo() {
     }
     if (!eng.rodando) return;
     const pa = pecas[eng.idx];
+    if (gateGain) gateGain.gain.setTargetAtTime(alvoGate(pa), ac.currentTime, 0.025);
     if (musGain) {
       const falando = pa?.tipo === "clip" && falandoEm(video.currentTime);
       musGain.gain.setTargetAtTime(volMusica() * (falando ? 0.32 : 1), ac.currentTime, 0.12);
@@ -484,6 +529,7 @@ function atualizarTempo() {
   const p = pecas[eng.idx];
   const id = p?.tipo === "clip" ? segEm(video.currentTime)?.id : null;
   document.querySelectorAll(".trecho").forEach((el) => el.classList.toggle("atual", +el.dataset.id === id));
+  sincronizarLegendaAtual();
 }
 $("btn-play").onclick = () => { if (st.exportando) return; eng.rodando ? pararReproducao() : reproduzir(); };
 $("scrub").addEventListener("input", (ev) => { if (st.exportando) return; arrastando = true; irPara(durEditada * ev.target.value / 1000); });
@@ -802,7 +848,7 @@ function desenharFinal(ctx, W, H) {
 function desenharTela() { desenharQuadro(ctxTela, tela.width, tela.height); }
 
 // ================================================================ áudio
-let ac = null, saidaGravacao = null, monitorGain = null, musGain = null, sfxGain = null;
+let ac = null, saidaGravacao = null, monitorGain = null, musGain = null, sfxGain = null, gateGain = null, filtroAlto = null, filtroBaixo = null;
 function prepararAudio() {
   if (ac) return;
   ac = new AudioContext();
@@ -814,7 +860,11 @@ function prepararAudio() {
   const comp = ac.createDynamicsCompressor(); comp.threshold.value = -22; comp.ratio.value = 3; comp.attack.value = 0.005; comp.release.value = 0.12;
   const passaAlta = ac.createBiquadFilter(); passaAlta.type = "highpass"; passaAlta.frequency.value = 80;
   const ganhoVoz = ac.createGain(); ganhoVoz.gain.value = 1.25;
-  voz.connect(passaAlta).connect(comp).connect(ganhoVoz).connect(master);
+  filtroAlto = passaAlta;
+  filtroBaixo = ac.createBiquadFilter(); filtroBaixo.type = "lowpass"; filtroBaixo.frequency.value = 20000;
+  gateGain = ac.createGain(); gateGain.gain.value = 1;
+  voz.connect(passaAlta).connect(filtroBaixo).connect(gateGain).connect(comp).connect(ganhoVoz).connect(master);
+  ajustarFiltros();
   const mus = ac.createMediaElementSource(musica);
   musGain = ac.createGain(); musGain.gain.value = 0; mus.connect(musGain).connect(master);
   sfxGain = ac.createGain(); sfxGain.gain.value = 0.55; sfxGain.connect(master);
@@ -922,7 +972,7 @@ function assinarBiblioteca() {
   const erro = () => {};
   db.collection("sons").onSnapshot((s) => { st.sons = s.docs.map((d) => ({ id: d.id, ...d.data() })); desenharSons(); decodificarBiblioteca(); }, erro);
   db.collection("logos").onSnapshot((s) => { st.logos = s.docs.map((d) => ({ id: d.id, ...d.data() })); carregarImgsLogo(); desenharLogos(); }, erro);
-  db.collection("presets").onSnapshot((s) => { st.presets = s.docs.map((d) => ({ id: d.id, ...d.data() })); desenharPresets(); }, erro);
+  db.collection("presets").onSnapshot((s) => { presetsDb = s.docs.map((d) => ({ id: d.id, ...d.data() })); juntarPresets(); }, erro);
 }
 function desenharSons() {
   const box = $("lista-sons"); box.innerHTML = "";
@@ -1011,6 +1061,18 @@ $("arq-logo").addEventListener("change", async (ev) => {
   } catch (e) { $("msg-logo").textContent = "Não consegui salvar o logo (" + (e?.code || e?.message || e) + ")."; }
 });
 
+const CHAVE_PRESETS = "estudio-edicao:presets";
+let presetsDb = [], presetsLocais = [];
+function carregarPresetsLocais() {
+  try { presetsLocais = JSON.parse(localStorage.getItem(CHAVE_PRESETS) || "[]"); } catch { presetsLocais = []; }
+  juntarPresets();
+}
+function juntarPresets() {
+  const nomes = new Set(presetsDb.map((p) => p.nome.toLowerCase()));
+  st.presets = [...presetsDb, ...presetsLocais.filter((p) => !nomes.has(p.nome.toLowerCase())).map((p) => ({ ...p, local: true }))];
+  desenharPresets();
+}
+function salvarPresetsLocais() { try { localStorage.setItem(CHAVE_PRESETS, JSON.stringify(presetsLocais)); return true; } catch { return false; } }
 function desenharPresets() {
   const sel = $("sel-preset"), atual = sel.value;
   sel.innerHTML = '<option value="">Nenhum (direção solta)</option>' + st.presets.map((p) => `<option value="${escapar(p.id)}">${escapar(p.nome)}</option>`).join("");
@@ -1024,23 +1086,39 @@ $("sel-preset").onchange = () => {
   aplicarDirecao(p.direcao); recalcular(); salvarLocal(); carregarFontes().then(desenharTela);
   $("est-direcao").textContent = "Preset: " + p.nome;
 };
-$("btn-salvar-preset").onclick = () => { $("novo-preset").hidden = false; $("nome-preset").value = st.presets.find((x) => x.id === $("sel-preset").value)?.nome || ""; $("nome-preset").focus(); };
+$("btn-salvar-preset").onclick = () => { $("novo-preset").hidden = false; $("nome-preset").value = st.presets.find((x) => x.id === $("sel-preset").value)?.nome || ""; $("novo-preset").scrollIntoView({ block: "nearest" }); $("nome-preset").focus(); };
+$("nome-preset").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("btn-confirmar-preset").click(); } });
 $("btn-cancelar-preset").onclick = () => { $("novo-preset").hidden = true; };
 $("btn-confirmar-preset").onclick = async () => {
   const nome = $("nome-preset").value.trim(); if (!nome) { $("nome-preset").focus(); return; }
   const existente = st.presets.find((x) => x.nome.toLowerCase() === nome.toLowerCase());
   const id = existente?.id || idNovo();
-  try { await db.collection("presets").doc(id).set({ nome, direcao: lerDirecao() }); $("novo-preset").hidden = true; $("sel-preset").value = id; $("est-direcao").textContent = "Preset salvo: " + nome; }
-  catch (e) { $("est-direcao").textContent = "Não consegui salvar o preset."; }
+  const dados = { nome, direcao: lerDirecao() };
+  let ondeSalvou = "";
+  if (db && !existente?.local) {
+    try { await db.collection("presets").doc(id).set(dados); ondeSalvou = "na sua conta"; }
+    catch (e) { console.warn("preset no db falhou", e); }
+  }
+  if (!ondeSalvou) {
+    presetsLocais = presetsLocais.filter((p) => p.id !== id && p.nome.toLowerCase() !== nome.toLowerCase());
+    presetsLocais.push({ id, ...dados });
+    if (salvarPresetsLocais()) { ondeSalvou = "neste computador"; juntarPresets(); }
+  }
+  if (ondeSalvou) { $("novo-preset").hidden = true; $("sel-preset").value = id; $("btn-apagar-preset").hidden = false; $("est-direcao").textContent = `Preset "${nome}" salvo ${ondeSalvou}`; }
+  else $("est-direcao").textContent = "Não consegui salvar o preset: o navegador bloqueou o armazenamento.";
 };
 $("btn-apagar-preset").onclick = async () => {
   const b = $("btn-apagar-preset"), id = $("sel-preset").value; if (!id) return;
   if (!b.dataset.ok) { b.dataset.ok = 1; b.textContent = "Apagar mesmo?"; setTimeout(() => { delete b.dataset.ok; b.textContent = "Apagar"; }, 2500); return; }
-  await db.doc("presets/" + id).delete().catch(() => {}); $("sel-preset").value = ""; b.hidden = true;
+  const p = st.presets.find((x) => x.id === id);
+  if (p?.local) { presetsLocais = presetsLocais.filter((x) => x.id !== id); salvarPresetsLocais(); juntarPresets(); }
+  else if (db) await db.doc("presets/" + id).delete().catch(() => {});
+  $("sel-preset").value = ""; b.hidden = true; delete b.dataset.ok; b.textContent = "Apagar";
 };
 
 // ---------------------------------------------------------------- estilo da legenda
 function sincronizarEstiloUI() {
+  $("leg-bloco").value = String(st.estilo.porBloco || 3);
   $("leg-fonte").value = st.estilo.fonte; $("leg-pos").value = st.estilo.posicao; $("leg-caixa").checked = st.estilo.caixa;
   const box = $("leg-cores"); box.innerHTML = "";
   for (const c of CORES) {
@@ -1087,7 +1165,7 @@ async function quadrosParaClaude() {
 }
 
 function montarPedido(ajuste) {
-  const trechos = st.segs.map((s) => `[${s.id}] ${s.t0.toFixed(2)}–${s.t1.toFixed(2)}s (${s.marca.toUpperCase()}) ${s.texto}`).join("\n");
+  const trechos = st.segs.map((s) => `[${s.id}] ${s.t0.toFixed(2)}–${s.t1.toFixed(2)}s (${s.marca === "outra" ? "OUTRA VOZ" : s.marca.toUpperCase()}${infoVoz(s)}) ${s.texto}`).join("\n");
   const sons = [...SONS_EMBUTIDOS, ...st.sons.map((s) => s.nome)];
   const ativo = (id) => op(id) ? "SIM" : "NÃO";
   let txt = `Você é editor de vídeos verticais curtos (TikTok, Reels, Shorts) para um criador brasileiro. Edite o vídeo abaixo, gravado no celular, com a pessoa falando para a câmera.
@@ -1100,7 +1178,9 @@ ${trechos}
 Marcações do criador (são ordens):
 - CORTAR: já saiu; não traga de volta.
 - DESTACAR: precisa ganhar grafismo, zoom ou efeito nesse trecho.
-- MANTER: pode sugerir cortar se for repetição, gaguejo, tomada errada ou enrolação.
+- OUTRA VOZ: fala de outra pessoa ou ruído; já saiu.
+- MANTER: fala da pessoa principal. SEJA CONSERVADOR: só sugira cortar (cortar_segmentos) uma repetição literal da mesma frase, uma tomada claramente errada/abandonada ou um trecho sem nenhum conteúdo. Na dúvida, NÃO corte: cortar fala boa da pessoa principal é o pior erro possível.
+- O nível em dB é relativo à voz principal: trechos bem mais baixos (−8 dB ou menos) ou de outro timbre costumam ser outra pessoa fora da câmera ou ruído. Se o texto também indicar outra pessoa (resposta de alguém de fora, "tá gravando?", conversa paralela), liste o id em "outras_vozes".
 
 ${st.analise ? `ANÁLISE PRÉVIA DO VÍDEO\nTema: ${st.analise.tema}\nPúblico: ${st.analise.publico}\nTom percebido: ${st.analise.tom}\nEstrutura: ${(st.analise.estrutura || []).map((p) => `${p.parte} (${fmt(p.t0)}–${fmt(p.t1)}): ${p.resumo}`).join(" | ")}\nCuidados: ${(st.analise.atencao || []).join("; ") || "—"}\n` : ""}
 DIREÇÃO DO CRIADOR
@@ -1135,7 +1215,8 @@ Responda SOMENTE com JSON válido, neste formato:
   "resumo": "1 ou 2 frases explicando a linha da edição",
   "gancho": {"t0": 21.4, "t1": 23.8, "texto": "ninguém te conta isso"},
   "correcoes": [{"id": 3, "texto": "texto corrigido do trecho"}],
-  "cortar_segmentos": [5, 9],
+  "cortar_segmentos": [9],
+  "outras_vozes": [5],
   "motivo_cortes": "por que esses cortes",
   "palavras_chave": ["palavra"],
   "emojis": [{"palavra": "dinheiro", "emoji": "💸"}],
@@ -1209,10 +1290,10 @@ async function editarComClaude(ajuste) {
     const imagens = await quadrosParaClaude();
     const opts = { modelTier: "complex" };
     if (imagens.length) opts.images = imagens;
-    const p = await sample.json(montarPedido(ajuste), opts);
-    if (!p || typeof p !== "object") throw new Error("resposta vazia");
+    const p = await pedirJSON(montarPedido(ajuste), imagens);
     let corrigidos = 0;
-    for (const c of p.correcoes || []) { const s = st.segs.find((x) => x.id === Number(c.id)); if (s && c.texto && String(c.texto).trim() !== s.texto) { s.texto = String(c.texto).trim(); corrigidos++; } }
+    for (const c of p.correcoes || []) { const s = st.segs.find((x) => x.id === Number(c.id)); if (s && !s.editado && c.texto && String(c.texto).trim() !== s.texto) { s.texto = String(c.texto).trim(); corrigidos++; } }
+    for (const id of p.outras_vozes || []) { const s = st.segs.find((x) => x.id === Number(id)); if (s && s.marca === "manter") s.marca = "outra"; }
     st.plano = validarPlano(p);
     st.plano.corrigidos = corrigidos;
     const est = p.estilo_legenda || {};
@@ -1262,6 +1343,7 @@ function mostrarPlano() {
   if (p.capa && !$("capa-titulo").value) $("capa-titulo").value = p.capa.titulo;
   const nC = p.cortar_segmentos.length;
   $("resumo-plano").innerHTML = `<b>${escapar(p.titulo)}</b><br>${escapar(p.resumo)}<br><span class="dica">${p.grafismos.length} grafismos · ${p.zooms.length} zooms · ${p.pausas.length} pausas · ${p.efeitos.length + p.sons.length} efeitos e sons · ${nC} trechos cortados${p.corrigidos ? ` · ${p.corrigidos} legendas corrigidas` : ""} · vídeo final com ${fmt(durEditada)}</span>`;
+  $("btn-restaurar-cortes").hidden = !p.cortar_segmentos.length;
   $("sugestao-trilha").textContent = p.sugestao_trilha ? "Trilha sugerida: " + p.sugestao_trilha : "";
   desenharVersoes();
   const box = $("plano-lista"); box.innerHTML = "";
@@ -1473,7 +1555,7 @@ async function analisarVideo() {
   try {
     let imagens = [];
     if (sampleImagens) imagens = (await (st.quadrosAnalise || capturarQuadros(6))) || [];
-    const trechos = st.segs.map((s) => `[${s.id}] ${s.t0.toFixed(1)}–${s.t1.toFixed(1)}s ${s.texto}`).join("\n");
+    const trechos = st.segs.map((s) => `[${s.id}] ${s.t0.toFixed(1)}–${s.t1.toFixed(1)}s${infoVoz(s) ? ` (${infoVoz(s).slice(2)})` : ""} ${s.texto}`).join("\n");
     const sons = [...SONS_EMBUTIDOS, ...st.sons.map((s) => s.nome)];
     const pedido = `Você é diretor de vídeos verticais curtos (TikTok, Reels, Shorts) para um criador brasileiro. Analise o vídeo bruto abaixo, gravado no celular, e prepare a direção de edição.
 
@@ -1497,7 +1579,7 @@ O QUE FAZER
    - "caixa_alta": verdadeiro/falso.
    - "chamada_final": chamada curta para a tela final (até 4 palavras), coerente com o fechamento.
    - "trilha": clima de música sugerido; "volume_trilha" de 0.08 a 0.35 (mais baixo em temas sérios).
-4. "marcacoes": sugira DESTACAR para os momentos-chave (gancho, piadas, viradas, frases de efeito) e CORTAR para tomadas erradas, repetições e falas soltas. Só ids da lista. Use poucos: no máximo 1/3 dos trechos.
+4. "marcacoes": sugira DESTACAR para os momentos-chave (gancho, piadas, viradas, frases de efeito); CORTAR só para repetição literal ou tomada claramente errada (na dúvida, não corte fala da pessoa principal); OUTRA para fala de outra pessoa fora da câmera ou ruído (use o nível em dB relativo e o texto como pistas). Só ids da lista. Use poucos.
 
 Sons disponíveis no Estúdio: ${sons.join(", ")}.
 
@@ -1510,16 +1592,11 @@ Responda SOMENTE com JSON válido:
   "pontos_fortes": ["..."],
   "atencao": ["..."],
   "direcao": {"tons": [], "tom_livre": "", "quero": "", "nao_quero": "", "opcoes": {"op-gancho": true}, "fonte": "Anton", "destaque": "#FFD400", "posicao": 0.68, "caixa_alta": true, "chamada_final": "", "trilha": "", "volume_trilha": 0.2},
-  "marcacoes": [{"id": 3, "marca": "destacar", "motivo": "por quê"}]
+  "marcacoes": [{"id": 3, "marca": "destacar|cortar|outra", "motivo": "por quê"}]
 }`;
-    let r;
-    try { r = await sample.json(pedido, imagens.length ? { modelTier: "complex", images: imagens } : { modelTier: "complex" }); }
-    catch (e) {
-      if (!imagens.length || e?.code === "not_granted" || e?.code === "rate_limited") throw e;
-      r = await sample.json(pedido, { modelTier: "complex" }); // tenta só com o texto
-    }
+    let r = await pedirJSON(pedido, imagens);
     if (chave !== st.chave) return null; // trocou de vídeo no meio
-    if (!r || typeof r !== "object" || !r.direcao) throw new Error("resposta incompleta");
+    if (!direcaoDe(r)) throw new Error("a resposta veio sem a direção");
     st.analise = r;
     salvarLocal();
     statusAnalise("Análise pronta. Revise abaixo e use o botão para preencher a direção.");
@@ -1561,15 +1638,16 @@ function mostrarAnalise() {
 }
 
 function aplicarAnalise() {
-  const d = st.analise?.direcao; if (!d) return;
-  const tons = (d.tons || []).filter((t) => TONS.includes(t));
+  const d = direcaoDe(st.analise); if (!d) { statusAnalise("A análise não trouxe a direção. Clique em Analisar de novo."); return; }
+  if (d.opcoes && typeof d.opcoes === "object") for (const [k, v] of Object.entries(d.opcoes)) { const kk = k.startsWith("op-") ? k : "op-" + k; if (!(kk in d.opcoes)) d.opcoes[kk] = v; }
+  const tons = (Array.isArray(d.tons) ? d.tons : String(d.tons || "").split(",")).map((t) => TONS.find((x) => normal(x) === normal(t))).filter(Boolean);
   if (tons.length) st.tons = new Set(tons);
   if (d.tom_livre) $("tom-livre").value = d.tom_livre;
   if (d.quero) $("quero").value = d.quero;
   if (d.nao_quero) $("nao-quero").value = d.nao_quero;
   for (const id of OPCOES) if (d.opcoes && typeof d.opcoes[id] === "boolean") $(id).checked = d.opcoes[id];
   if (["Anton", "Bangers", "Montserrat"].includes(d.fonte)) st.estilo.fonte = d.fonte;
-  const cor = CORES.find((c) => c.toLowerCase() === String(d.destaque || "").toLowerCase());
+  const cor = CORES.find((c) => c.toLowerCase() === String(d.destaque || "").toLowerCase()) || (/^#[0-9a-f]{6}$/i.test(d.destaque || "") ? d.destaque.toUpperCase() : null);
   if (cor) st.estilo.destaque = cor;
   if (typeof d.posicao === "number") st.estilo.posicao = clamp(d.posicao, 0.5, 0.85);
   if (typeof d.caixa_alta === "boolean") st.estilo.caixa = d.caixa_alta;
@@ -1579,7 +1657,8 @@ function aplicarAnalise() {
   let marcados = 0;
   for (const m of st.analise.marcacoes || []) {
     const s = st.segs.find((x) => x.id === Number(m.id));
-    if (s && s.marca === "manter" && ["destacar", "cortar"].includes(m.marca)) { s.marca = m.marca; marcados++; }
+    const mm = normal(m.marca).startsWith("outra") ? "outra" : normal(m.marca);
+    if (s && s.marca === "manter" && ["destacar", "cortar", "outra"].includes(mm)) { s.marca = mm; marcados++; }
   }
   $("sel-preset").value = ""; $("btn-apagar-preset").hidden = true;
   desenharChips(); sincronizarEstiloUI(); carregarFontes().then(desenharTela);
@@ -1595,5 +1674,214 @@ $("btn-autopreencher").onclick = async () => {
   if (!st.analise) await analisarVideo();
   if (st.analise) aplicarAnalise();
 };
+$("btn-restaurar-cortes").onclick = async () => { if (!st.plano) return; st.plano.cortar_segmentos = []; recalcular(); mostrarTrechos(); mostrarPlano(); salvarLocal(); await irPara(0); };
 $("btn-reanalisar").onclick = async () => { st.analise = null; st.quadrosAnalise = null; mostrarAnalise(); await analisarVideo(); };
 mostrarAnalise();
+
+
+// ================================================================ análise do áudio: voz, silêncio, outras vozes
+function analisarAudio(pcm) {
+  const SR = 16000, HOP = 320, WIN = 640, hop = HOP / SR;
+  const n = Math.max(1, Math.floor((pcm.length - WIN) / HOP) + 1);
+  const db = new Float32Array(n), f0 = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    let e = 0; const o = i * HOP;
+    for (let k = 0; k < WIN; k++) { const x = pcm[o + k] || 0; e += x * x; }
+    db[i] = 10 * Math.log10(e / WIN + 1e-10);
+  }
+  const ord = Float32Array.from(db).sort();
+  const pct = (p) => ord[Math.min(ord.length - 1, Math.floor(p * ord.length))];
+  const piso = pct(0.1), pico = pct(0.97);
+  // tom (f0) por autocorrelação em 8 kHz, só nos quadros com energia
+  const W8 = 320, L0 = 20, L1 = 115, buf = new Float32Array(W8);
+  for (let i = 0; i < n; i++) {
+    if (db[i] < piso + 8) continue;
+    const o = i * HOP;
+    let m = 0;
+    for (let k = 0; k < W8; k++) { buf[k] = ((pcm[o + 2 * k] || 0) + (pcm[o + 2 * k + 1] || 0)) / 2; m += buf[k]; }
+    m /= W8; let e0 = 0;
+    for (let k = 0; k < W8; k++) { buf[k] -= m; e0 += buf[k] * buf[k]; }
+    if (e0 <= 0) continue;
+    let melhor = 0, lag = 0;
+    for (let L = L0; L <= L1; L++) {
+      let c = 0, e1 = 0;
+      for (let k = 0; k + L < W8; k++) { c += buf[k] * buf[k + L]; e1 += buf[k + L] * buf[k + L]; }
+      const r = c / Math.sqrt(e0 * e1 + 1e-12);
+      if (r > melhor) { melhor = r; lag = L; }
+    }
+    if (melhor > 0.5) f0[i] = 8000 / lag;
+  }
+  return { hop, db, f0, piso, pico };
+}
+
+function limiarVoz() {
+  const A = st.audio; if (!A) return -Infinity;
+  const sens = parseFloat($("aj-sens").value); // 0.15 (pega tudo) … 0.5 (só voz forte)
+  return Math.max(A.piso + 6, A.piso + sens * (A.pico - A.piso));
+}
+const quadro = (t) => st.audio ? clamp(Math.floor(t / st.audio.hop), 0, st.audio.db.length - 1) : 0;
+
+// regiões com voz dentro de [a, b], separadas por pausas maiores que pmin
+function regioesDeFala(a, b, pmin) {
+  const A = st.audio; if (!A) return [[a, b]];
+  const lim = limiarVoz(), regs = [];
+  let ini = null, ultVoz = null;
+  for (let i = quadro(a); i <= quadro(b); i++) {
+    if (A.db[i] > lim) { if (ini === null) ini = i; ultVoz = i; }
+    else if (ini !== null && (i - ultVoz) * A.hop >= pmin) { regs.push([ini * A.hop, (ultVoz + 1) * A.hop]); ini = null; }
+  }
+  if (ini !== null) regs.push([ini * A.hop, Math.min(b, (ultVoz + 1) * A.hop)]);
+  // a transcrição diz que há fala aqui: se a energia não achou nada, confia na transcrição
+  return regs.length ? regs : [[a, b]];
+}
+
+// estende o começo e o fim de cada trecho até onde a voz realmente começa e termina
+function ajustarLimites() {
+  const A = st.audio, ord = [...st.segs].sort((x, y) => x.t0 - y.t0);
+  const lim = limiarVoz();
+  ord.forEach((s, k) => {
+    if (!A) { s.a = s.t0; s.b = s.t1; return; }
+    const minA = Math.max(0, k ? ord[k - 1].t1 : 0, s.t0 - 0.5), maxB = Math.min(st.dur, k + 1 < ord.length ? ord[k + 1].t0 : st.dur, s.t1 + 0.8);
+    let i = quadro(s.t0);
+    while (i > 0 && (i - 1) * A.hop >= minA && A.db[i - 1] > lim) i--;
+    let j = quadro(s.t1);
+    while (j + 1 < A.db.length && (j + 1) * A.hop <= maxB && A.db[j + 1] > lim) j++;
+    s.a = Math.min(s.t0, i * A.hop); s.b = Math.max(s.t1, Math.min(maxB, (j + 1) * A.hop));
+  });
+}
+
+function mediana(xs) { if (!xs.length) return null; const o = [...xs].sort((a, b) => a - b); return o[Math.floor(o.length / 2)]; }
+
+// nível e tom de cada trecho em relação à voz principal (a que mais fala)
+function classificarVozes(marcar) {
+  const A = st.audio; if (!A || !st.segs.length) return;
+  const lim = limiarVoz();
+  for (const s of st.segs) {
+    const niveis = [], tons = []; let voz = 0, total = 0;
+    for (let i = quadro(s.t0); i <= quadro(s.t1); i++) { total++; if (A.db[i] > lim) { voz++; niveis.push(A.db[i]); if (A.f0[i]) tons.push(A.f0[i]); } }
+    s.voz = { nivel: mediana(niveis) ?? A.piso, tom: mediana(tons), frac: total ? voz / total : 0 };
+  }
+  const pesados = [];
+  for (const s of st.segs) { const peso = Math.max(1, Math.round((s.t1 - s.t0) * 4)); for (let k = 0; k < peso; k++) pesados.push(s); }
+  const ref = mediana(pesados.map((s) => s.voz.nivel));
+  const refTom = mediana(pesados.map((s) => s.voz.tom).filter(Boolean));
+  for (const s of st.segs) {
+    s.voz.rel = s.voz.nivel - ref;
+    const difTom = s.voz.tom && refTom ? Math.abs(Math.log2(s.voz.tom / refTom)) : 0;
+    s.voz.outra = s.voz.rel < -9 || (difTom > 0.5 && s.voz.rel < -3) || s.voz.frac < 0.12;
+    if (marcar && s.voz.outra && s.marca === "manter" && op("op-vozprincipal")) s.marca = "outra";
+  }
+}
+function infoVoz(s) { return s.voz ? `, voz ${s.voz.rel > 0 ? "+" : ""}${s.voz.rel.toFixed(0)} dB${s.voz.outra ? ", parece outra voz" : ""}` : ""; }
+
+async function garantirAudio() {
+  if (st.audio || !st.arquivo) return;
+  const chave = st.chave;
+  try {
+    const pcm = await audio16k(st.arquivo);
+    if (chave !== st.chave) return;
+    st.audio = analisarAudio(pcm);
+    classificarVozes(false);
+    recalcular(); mostrarTrechos(); if (st.plano) mostrarPlano(); desenharTela();
+  } catch {}
+}
+
+// redução de ruído: abaixa a voz fora das falas mantidas e nos quadros sem voz
+function alvoGate(peca) {
+  if (!op("op-ruido") || !st.audio || peca?.tipo !== "clip") return 1;
+  const t = video.currentTime;
+  const s = st.segs.find((x) => t >= (x.a ?? x.t0) - 0.08 && t <= (x.b ?? x.t1) + 0.12 && x.marca !== "cortar" && !(x.marca === "outra" && op("op-vozprincipal")));
+  if (!s) return 0.06;
+  const i = quadro(t), lim = limiarVoz();
+  let max = -Infinity; for (let k = Math.max(0, i - 3); k <= Math.min(st.audio.db.length - 1, i + 3); k++) max = Math.max(max, st.audio.db[k]);
+  return max > lim ? 1 : 0.3;
+}
+function ajustarFiltros() {
+  if (!filtroAlto) return;
+  const r = op("op-ruido");
+  filtroAlto.frequency.value = r ? 100 : 80;
+  filtroBaixo.frequency.value = r ? 8500 : 20000;
+}
+
+// ---------------------------------------------------------------- ajustes dos cortes
+function mostrarAjustes() {
+  $("aj-pausa-v").textContent = `${parseFloat($("aj-pausa").value).toFixed(2)} s`;
+  $("aj-respiro-v").textContent = `${parseFloat($("aj-respiro").value).toFixed(2)} s`;
+  const v = parseFloat($("aj-sens").value);
+  $("aj-sens-v").textContent = v < 0.22 ? "pega tudo" : v < 0.34 ? "equilibrado" : v < 0.44 ? "só voz clara" : "só voz forte";
+}
+for (const id of Object.keys(AJUSTES)) $(id).addEventListener("input", () => {
+  mostrarAjustes();
+  if (id === "aj-sens" && st.audio) classificarVozes(false);
+  recalcular(); if (id === "aj-sens") mostrarTrechos(); salvarLocal();
+  if (!eng.rodando) irPara(Math.min(tempoEditado(), durEditada));
+});
+$("op-ruido").addEventListener("change", ajustarFiltros);
+$("aj-padrao").onclick = () => { for (const [id, v] of Object.entries(AJUSTES)) $(id).value = v; $("aj-sens").dispatchEvent(new Event("input")); };
+$("aj-ouvir").onclick = async () => { if (!st.segs.length) return; await irPara(0); reproduzir(); };
+mostrarAjustes();
+
+// ---------------------------------------------------------------- edição de legenda no monitor
+let segLegenda = null;
+function crescer(ta) { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + 2 + "px"; }
+function segsVisiveis() { const c = cortesClaude(); return st.segs.filter((s) => !cortado(s, c)).sort((a, b) => a.t0 - b.t0); }
+function sincronizarLegendaAtual(forcar) {
+  const box = $("leg-editor"); if (!box) return;
+  const p = pecas[eng.idx];
+  const t = video.currentTime;
+  let s = p?.tipo === "clip" ? st.segs.find((x) => t >= (x.a ?? x.t0) && t < (x.b ?? x.t1)) : null;
+  if (!s && segLegenda) s = segLegenda;
+  if (!s) { const v = segsVisiveis(); s = v.find((x) => x.t0 >= t) || v[v.length - 1] || null; }
+  box.hidden = !s;
+  if (!s) return;
+  const ta = $("leg-texto");
+  if (s !== segLegenda || (forcar && document.activeElement !== ta)) {
+    segLegenda = s;
+    if (document.activeElement !== ta) ta.value = s.texto;
+    $("leg-oculta").checked = !!s.semLegenda;
+    $("leg-tempo").textContent = `Trecho ${s.id} · ${fmtD(s.t0)} do bruto`;
+  }
+}
+$("leg-texto").addEventListener("input", () => {
+  const s = segLegenda; if (!s) return;
+  s.texto = $("leg-texto").value.replace(/\s+/g, " ").trim(); s.editado = true;
+  const el = document.querySelector(`.trecho[data-id="${s.id}"] .txt`); if (el) { el.value = s.texto; crescer(el); }
+  recalcular(); desenharTela(); salvarLocal();
+});
+$("leg-oculta").addEventListener("change", () => { const s = segLegenda; if (!s) return; s.semLegenda = $("leg-oculta").checked; recalcular(); desenharTela(); salvarLocal(); });
+async function irSegLegenda(dir) {
+  const v = segsVisiveis(); if (!v.length) return;
+  let i = v.indexOf(segLegenda); i = i < 0 ? 0 : clamp(i + dir, 0, v.length - 1);
+  segLegenda = v[i]; await irParaBruto(v[i].t0 + 0.05); segLegenda = v[i]; sincronizarLegendaAtual(true);
+  $("leg-texto").value = v[i].texto; $("leg-oculta").checked = !!v[i].semLegenda;
+  $("leg-tempo").textContent = `Trecho ${v[i].id} · ${fmtD(v[i].t0)} do bruto`;
+}
+$("leg-ant").onclick = () => irSegLegenda(-1);
+$("leg-prox").onclick = () => irSegLegenda(1);
+$("leg-bloco").onchange = (e) => { st.estilo.porBloco = parseInt(e.target.value, 10); recalcular(); desenharTela(); salvarLocal(); };
+tela.addEventListener("click", () => { if (!st.segs.length || eng.rodando) return; sincronizarLegendaAtual(true); $("leg-texto").focus(); });
+
+// ---------------------------------------------------------------- pedidos ao Claude que sempre devolvem JSON
+function extrairJSON(txt) {
+  if (!txt) return null;
+  let t = String(txt).replace(/```(?:json)?/gi, "");
+  const i = t.indexOf("{"), j = t.lastIndexOf("}");
+  if (i < 0 || j <= i) return null;
+  try { return JSON.parse(t.slice(i, j + 1)); } catch { return null; }
+}
+async function pedirJSON(pedido, imagens) {
+  const tentativas = imagens?.length ? [{ images: imagens }, {}] : [{}];
+  let ultimo = null;
+  for (const extra of tentativas) {
+    try { const r = await sample.json(pedido, { modelTier: "complex", ...extra }); if (r && typeof r === "object") return r; }
+    catch (e) { ultimo = e; if (e?.code === "not_granted" || e?.code === "rate_limited") throw e; console.warn("sample.json falhou", e); }
+    try { const r = await sample(pedido, { modelTier: "complex", ...extra }); const j = extrairJSON(r?.text); if (j) return j; ultimo = new Error("a resposta não veio em JSON"); }
+    catch (e) { ultimo = e; if (e?.code === "not_granted" || e?.code === "rate_limited") throw e; console.warn("sample falhou", e); }
+  }
+  throw ultimo || new Error("sem resposta");
+}
+function direcaoDe(a) {
+  if (!a || typeof a !== "object") return null;
+  const d = a.direcao || a["direção"] || a.direction || (a.tom_livre || a.quero ? a : null);
+  return d && typeof d === "object" ? d : null;
+}
