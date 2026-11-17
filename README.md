@@ -9,7 +9,8 @@ Segue a mesma lógica do [Estúdio de Canais](https://github.com/MullerDeFranca/
 Artefato: [Estúdio de Edição](https://claude.ai/artifact/Q8dK7BdsiQquCn8y7dGpTX). Código em `estudio/`.
 
 1. Enviar o vídeo (fica só no computador).
-2. A fala é transcrita no próprio navegador (Whisper base).
+2. A fala é transcrita no próprio navegador (Whisper base). Enquanto isso, a página separa quadros do vídeo inteiro; quando a transcrição termina, o Claude analisa tema, público, tom, roteiro e cuidados.
+   O botão **Preencher direção automaticamente** aplica a sugestão: tons, humor, quero/não quero, recursos ligados, estilo da legenda, chamada final, volume da trilha e marcações de trechos (sem mexer no que você já marcou).
 3. Marcar cada trecho: manter, cortar ou destacar; corrigir a legenda se precisar.
 4. Direção: tom, descrição do humor, o que quer e o que não quer, trilha opcional.
 5. **Começar a edição com o Claude**: cortes, correções da legenda, palavras em destaque, grafismos, zooms, legenda do post, hashtags e comentário fixado.

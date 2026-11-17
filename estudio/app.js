@@ -24,6 +24,7 @@ const st = {
   presets: [],         // {id, nome, ...}
   logoId: "",
   capaBlob: null,
+  analise: null, analisando: false, quadrosAnalise: null,
 };
 const video = $("video"), musica = $("musica");
 const tela = $("tela"), ctxTela = tela.getContext("2d");
@@ -72,7 +73,7 @@ function aplicarDirecao(d) {
 }
 function salvarLocal() {
   if (!st.chave) return;
-  try { localStorage.setItem(st.chave, JSON.stringify({ segs: st.segs, plano: st.plano, versao: st.versao, direcao: lerDirecao() })); } catch {}
+  try { localStorage.setItem(st.chave, JSON.stringify({ segs: st.segs, plano: st.plano, versao: st.versao, analise: st.analise, direcao: lerDirecao() })); } catch {}
 }
 function lerLocal(chave) { try { return JSON.parse(localStorage.getItem(chave) || "null"); } catch { return null; } }
 
@@ -84,6 +85,7 @@ function lerLocal(chave) { try { return JSON.parse(localStorage.getItem(chave) |
   if (sample) { try { sampleImagens = !!(await sample.limits())?.images; } catch { sampleImagens = false; } }
   if (ditado) prepararDitado();
   if (db) assinarBiblioteca();
+  if (sample && st.segs.length && !st.analise && !st.analisando) analisarVideo();
   else {
     ["msg-som", "msg-logo"].forEach((id) => $(id).textContent = "A biblioteca só funciona no app do Claude.");
     ["btn-som", "btn-logo", "btn-salvar-preset"].forEach((id) => $(id).disabled = true);
@@ -102,7 +104,8 @@ async function carregarVideo(f) {
   pararReproducao();
   mostrar($("erro-video"), "");
   st.arquivo = f; st.chave = `estudio-edicao:${f.name}:${f.size}`;
-  st.segs = []; st.plano = null; st.videoBlob = null; st.versao = "completa";
+  st.segs = []; st.plano = null; st.videoBlob = null; st.versao = "completa"; st.analise = null; st.quadrosAnalise = null;
+  mostrarAnalise();
   $("exp-acoes").hidden = true; mostrar($("exp-msg"), ""); $("plano-box").hidden = true;
   if (video.src) URL.revokeObjectURL(video.src);
   video.src = URL.createObjectURL(f);
@@ -124,7 +127,10 @@ async function carregarVideo(f) {
   const salvo = lerLocal(st.chave);
   if (salvo?.segs?.length) {
     st.segs = salvo.segs; st.plano = salvo.plano || null; st.versao = salvo.versao || "completa";
+    st.analise = salvo.analise || null;
     aplicarDirecao(salvo.direcao);
+    mostrarAnalise();
+    if (!st.analise && sample) analisarVideo();
     recalcular(); mostrarTrechos(); if (st.plano) mostrarPlano(); atualizarBotoes();
     $("est-trans").textContent = "Recuperado da última sessão";
     await irPara(0);
@@ -181,6 +187,7 @@ async function transcrever() {
   catch { $("trans-status").textContent = "Não consegui ler o áudio deste vídeo. Confira se ele tem som e está em MP4."; return; }
   if (!worker) worker = new Worker("transcritor.js", { type: "module" });
   const inicio = performance.now();
+  st.quadrosAnalise = capturarQuadros(6); // análise visual em paralelo à transcrição
   worker.onmessage = (ev) => {
     const m = ev.data;
     if (m.tipo === "status") $("trans-status").textContent = m.texto;
@@ -195,6 +202,7 @@ async function transcrever() {
       $("trans-progresso").hidden = true;
       if (!st.segs.length) { $("trans-vazio").hidden = false; $("trans-vazio").textContent = "Não encontrei fala neste vídeo."; return; }
       recalcular(); mostrarTrechos(); salvarLocal(); atualizarBotoes(); irPara(0);
+      analisarVideo();
     }
   };
   worker.postMessage({ tipo: "transcrever", audio, duracao: st.dur }, [audio.buffer]);
@@ -1059,6 +1067,7 @@ function atualizarBotoes() {
   $("btn-exportar").disabled = !st.arquivo || !pronto || st.exportando;
   $("btn-capa-atual").disabled = !st.arquivo || st.exportando;
   $("btn-capa-claude").disabled = !st.plano?.capa || st.exportando;
+  if (typeof atualizarAnaliseUI === "function") atualizarAnaliseUI();
 }
 
 async function quadrosParaClaude() {
@@ -1093,6 +1102,7 @@ Marcações do criador (são ordens):
 - DESTACAR: precisa ganhar grafismo, zoom ou efeito nesse trecho.
 - MANTER: pode sugerir cortar se for repetição, gaguejo, tomada errada ou enrolação.
 
+${st.analise ? `ANÁLISE PRÉVIA DO VÍDEO\nTema: ${st.analise.tema}\nPúblico: ${st.analise.publico}\nTom percebido: ${st.analise.tom}\nEstrutura: ${(st.analise.estrutura || []).map((p) => `${p.parte} (${fmt(p.t0)}–${fmt(p.t1)}): ${p.resumo}`).join(" | ")}\nCuidados: ${(st.analise.atencao || []).join("; ") || "—"}\n` : ""}
 DIREÇÃO DO CRIADOR
 Tom: ${[...st.tons].join(", ") || "não informado"}
 Sobre o humor: ${$("tom-livre").value.trim() || "—"}
@@ -1417,3 +1427,173 @@ $("btn-capa-baixar").onclick = () => st.capaBlob && baixar(nomeArquivo("jpg", "-
 // ================================================================ início
 desenharChips(); sincronizarEstiloUI(); desenharLogos(); desenharSons(); carregarFontes(); atualizarBotoes();
 ctxTela.fillStyle = "#000"; ctxTela.fillRect(0, 0, tela.width, tela.height);
+
+
+// ================================================================ análise do vídeo e preenchimento automático da direção
+const DESC_OPCOES = {
+  "op-gancho": "gancho na abertura (repete a frase mais forte no início)",
+  "op-camera": "cortes de câmera (alterna plano aberto e fechado)",
+  "op-humor": "efeitos de humor (pausa congelada, tremor, P&B, grilo)",
+  "op-silencio": "cortar silêncios",
+  "op-muletas": "limpar muletas (né, tipo, ahn)",
+  "op-sfx": "efeitos sonoros",
+  "op-emoji": "emoji na legenda",
+  "op-barra": "barra de progresso",
+  "op-atras": "grafismos atrás da pessoa (recorte, mais pesado)",
+  "op-luz": "corrigir luz e cor",
+  "op-final": "tela final com @ e chamada",
+};
+
+async function capturarQuadros(n) {
+  if (!st.vw) return [];
+  const c = document.createElement("canvas"); c.width = 288; c.height = 512;
+  const cx = c.getContext("2d"); const blobs = [];
+  const volta = video.currentTime;
+  try {
+    for (let i = 0; i < n; i++) {
+      if (eng.rodando || st.exportando) break;
+      await saltar(st.dur * (i + 0.5) / n);
+      const g = geometria(c.width, c.height, 1);
+      cx.drawImage(video, g.dx, g.dy, g.dw, g.dh);
+      const b = await new Promise((ok) => c.toBlob(ok, "image/jpeg", 0.72));
+      if (b) blobs.push(b);
+    }
+  } catch {}
+  if (!eng.rodando && !st.exportando) { await saltar(volta); desenharTela(); }
+  return blobs;
+}
+
+function statusAnalise(texto) { $("analise-status").textContent = texto; }
+
+async function analisarVideo() {
+  if (!sample || st.analisando || !st.segs.length) { atualizarAnaliseUI(); return st.analise; }
+  st.analisando = true; atualizarAnaliseUI();
+  statusAnalise("O Claude está analisando o vídeo…");
+  const chave = st.chave;
+  try {
+    let imagens = [];
+    if (sampleImagens) imagens = (await (st.quadrosAnalise || capturarQuadros(6))) || [];
+    const trechos = st.segs.map((s) => `[${s.id}] ${s.t0.toFixed(1)}–${s.t1.toFixed(1)}s ${s.texto}`).join("\n");
+    const sons = [...SONS_EMBUTIDOS, ...st.sons.map((s) => s.nome)];
+    const pedido = `Você é diretor de vídeos verticais curtos (TikTok, Reels, Shorts) para um criador brasileiro. Analise o vídeo bruto abaixo, gravado no celular, e prepare a direção de edição.
+
+DURAÇÃO: ${st.dur.toFixed(1)} s
+TRANSCRIÇÃO AUTOMÁTICA (pode ter erros), com id e tempo:
+${trechos}
+${imagens.length ? `\nAs ${imagens.length} imagens anexadas são quadros espalhados pelo vídeo inteiro, em ordem: veja cenário, enquadramento, luz, expressão e energia da pessoa.` : ""}
+
+O QUE FAZER
+1. Entenda o tema, o público provável, o tom real da fala (não o que você imagina) e a estrutura do roteiro (gancho, desenvolvimento, virada, fechamento, chamada).
+2. Aponte cuidados: temas sensíveis, pessoas ou grupos que não devem virar alvo da piada, estímulos visuais a evitar, partes que não podem ser cortadas.
+3. Preencha a direção do Estúdio como um editor experiente faria para ESTE vídeo:
+   - "tons": de 1 a 3, só desta lista: ${TONS.join(", ")}.
+   - "tom_livre": 2 ou 3 frases descrevendo o humor/clima, citando falas reais do vídeo onde a ênfase deve cair.
+   - "quero": pedidos concretos ligados a momentos e palavras reais do vídeo (grafismos, zooms, efeitos, destaques).
+   - "nao_quero": o que evitar, com base no tema e no tom.
+   - "opcoes": verdadeiro/falso para cada recurso: ${Object.entries(DESC_OPCOES).map(([k, v]) => `${k} = ${v}`).join("; ")}. Desligue o que não combina (ex.: efeitos de humor num tema sério; recorte se a pessoa não aparece bem ou o fundo é confuso; correção de luz se já está bem iluminado).
+   - "fonte": Anton (impacto), Bangers (humor/cartoon) ou Montserrat (limpo, sério/informativo).
+   - "destaque": uma destas cores: ${CORES.join(", ")}.
+   - "posicao": altura da legenda de 0.55 a 0.80 (evite cobrir o rosto e a parte de baixo, onde ficam os botões da rede).
+   - "caixa_alta": verdadeiro/falso.
+   - "chamada_final": chamada curta para a tela final (até 4 palavras), coerente com o fechamento.
+   - "trilha": clima de música sugerido; "volume_trilha" de 0.08 a 0.35 (mais baixo em temas sérios).
+4. "marcacoes": sugira DESTACAR para os momentos-chave (gancho, piadas, viradas, frases de efeito) e CORTAR para tomadas erradas, repetições e falas soltas. Só ids da lista. Use poucos: no máximo 1/3 dos trechos.
+
+Sons disponíveis no Estúdio: ${sons.join(", ")}.
+
+Responda SOMENTE com JSON válido:
+{
+  "tema": "assunto em uma frase",
+  "publico": "para quem é",
+  "tom": "como a pessoa fala de fato, em uma frase",
+  "estrutura": [{"parte": "gancho", "t0": 0, "t1": 6, "resumo": "o que acontece"}],
+  "pontos_fortes": ["..."],
+  "atencao": ["..."],
+  "direcao": {"tons": [], "tom_livre": "", "quero": "", "nao_quero": "", "opcoes": {"op-gancho": true}, "fonte": "Anton", "destaque": "#FFD400", "posicao": 0.68, "caixa_alta": true, "chamada_final": "", "trilha": "", "volume_trilha": 0.2},
+  "marcacoes": [{"id": 3, "marca": "destacar", "motivo": "por quê"}]
+}`;
+    let r;
+    try { r = await sample.json(pedido, imagens.length ? { modelTier: "complex", images: imagens } : { modelTier: "complex" }); }
+    catch (e) {
+      if (!imagens.length || e?.code === "not_granted" || e?.code === "rate_limited") throw e;
+      r = await sample.json(pedido, { modelTier: "complex" }); // tenta só com o texto
+    }
+    if (chave !== st.chave) return null; // trocou de vídeo no meio
+    if (!r || typeof r !== "object" || !r.direcao) throw new Error("resposta incompleta");
+    st.analise = r;
+    salvarLocal();
+    statusAnalise("Análise pronta. Revise abaixo e use o botão para preencher a direção.");
+  } catch (e) {
+    statusAnalise(e?.code === "not_granted" ? "Sem permissão para chamar o Claude por esta página."
+      : e?.code === "rate_limited" ? "Muitos pedidos seguidos. Espere um minuto e clique para analisar de novo."
+      : "Não consegui analisar o vídeo: " + (e?.message || e));
+  } finally {
+    st.analisando = false; mostrarAnalise();
+  }
+  return st.analise;
+}
+
+function atualizarAnaliseUI() {
+  const b = $("btn-autopreencher"), re = $("btn-reanalisar");
+  const pronto = !!sample && st.segs.length > 0;
+  b.disabled = !pronto || st.analisando || st.exportando;
+  b.textContent = st.analisando ? "Analisando o vídeo…" : st.analise ? "Preencher direção automaticamente" : "Analisar e preencher a direção";
+  re.hidden = !st.analise || st.analisando;
+  if (!sample) statusAnalise("A análise usa o Claude: abra o Estúdio no app do Claude.");
+  else if (!st.segs.length && !st.analisando) statusAnalise("A análise começa sozinha quando a transcrição terminar.");
+}
+
+function mostrarAnalise() {
+  atualizarAnaliseUI();
+  const box = $("analise-resumo"), a = st.analise;
+  if (!a) { box.hidden = true; box.innerHTML = ""; return; }
+  const lista = (xs) => (xs || []).filter(Boolean).map((x) => `<li>${escapar(x)}</li>`).join("");
+  const estr = (a.estrutura || []).map((p) => `<li><button class="tempo" type="button" data-t="${Number(p.t0) || 0}">${fmt(p.t0)}</button> <b>${escapar(p.parte || "")}</b>: ${escapar(p.resumo || "")}</li>`).join("");
+  box.innerHTML = `
+    <p><b>Tema:</b> ${escapar(a.tema || "—")}</p>
+    <p><b>Público:</b> ${escapar(a.publico || "—")}</p>
+    <p><b>Tom:</b> ${escapar(a.tom || "—")}</p>
+    ${estr ? `<p class="sub">Roteiro</p><ul class="lista-analise">${estr}</ul>` : ""}
+    ${a.pontos_fortes?.length ? `<p class="sub">Pontos fortes</p><ul class="lista-analise">${lista(a.pontos_fortes)}</ul>` : ""}
+    ${a.atencao?.length ? `<p class="sub">Cuidados</p><ul class="lista-analise">${lista(a.atencao)}</ul>` : ""}`;
+  box.querySelectorAll("button[data-t]").forEach((b) => b.onclick = () => irParaBruto(parseFloat(b.dataset.t) + 0.01));
+  box.hidden = false;
+}
+
+function aplicarAnalise() {
+  const d = st.analise?.direcao; if (!d) return;
+  const tons = (d.tons || []).filter((t) => TONS.includes(t));
+  if (tons.length) st.tons = new Set(tons);
+  if (d.tom_livre) $("tom-livre").value = d.tom_livre;
+  if (d.quero) $("quero").value = d.quero;
+  if (d.nao_quero) $("nao-quero").value = d.nao_quero;
+  for (const id of OPCOES) if (d.opcoes && typeof d.opcoes[id] === "boolean") $(id).checked = d.opcoes[id];
+  if (["Anton", "Bangers", "Montserrat"].includes(d.fonte)) st.estilo.fonte = d.fonte;
+  const cor = CORES.find((c) => c.toLowerCase() === String(d.destaque || "").toLowerCase());
+  if (cor) st.estilo.destaque = cor;
+  if (typeof d.posicao === "number") st.estilo.posicao = clamp(d.posicao, 0.5, 0.85);
+  if (typeof d.caixa_alta === "boolean") st.estilo.caixa = d.caixa_alta;
+  if (d.chamada_final) $("final-chamada").value = String(d.chamada_final).slice(0, 40);
+  if (typeof d.volume_trilha === "number") $("vol-musica").value = clamp(d.volume_trilha, 0.05, 0.6);
+  // marcações: só nos trechos que o criador ainda não marcou
+  let marcados = 0;
+  for (const m of st.analise.marcacoes || []) {
+    const s = st.segs.find((x) => x.id === Number(m.id));
+    if (s && s.marca === "manter" && ["destacar", "cortar"].includes(m.marca)) { s.marca = m.marca; marcados++; }
+  }
+  $("sel-preset").value = ""; $("btn-apagar-preset").hidden = true;
+  desenharChips(); sincronizarEstiloUI(); carregarFontes().then(desenharTela);
+  recalcular(); mostrarTrechos(); salvarLocal();
+  if (!eng.rodando) irPara(Math.min(tempoEditado(), durEditada));
+  $("est-direcao").textContent = "Preenchida pelo Claude";
+  const trilha = d.trilha ? ` Trilha sugerida: ${d.trilha}.` : "";
+  statusAnalise(`Direção preenchida${marcados ? ` e ${marcados} trechos marcados` : ""}. Ajuste o que quiser antes de editar.${trilha}`);
+  for (const id of ["tom-livre", "quero", "nao-quero"]) { const el = $(id); el.style.height = "auto"; el.style.height = Math.min(260, el.scrollHeight + 4) + "px"; }
+}
+
+$("btn-autopreencher").onclick = async () => {
+  if (!st.analise) await analisarVideo();
+  if (st.analise) aplicarAnalise();
+};
+$("btn-reanalisar").onclick = async () => { st.analise = null; st.quadrosAnalise = null; mostrarAnalise(); await analisarVideo(); };
+mostrarAnalise();

@@ -154,6 +154,11 @@ select.sel { background: var(--painel-2); border: 1px solid var(--linha); border
 .capa-box { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
 .capa-box img { width: 120px; border-radius: 6px; box-shadow: 0 0 0 1px var(--linha); }
 .versoes { display: flex; gap: 6px; flex-wrap: wrap; }
+.analise { background: var(--painel-2); border: 1px solid var(--linha); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.analise-resumo { font-size: 13.5px; display: flex; flex-direction: column; gap: 4px; }
+.analise-resumo p { margin: 0; }
+.lista-analise { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 3px; }
+.lista-analise .tempo { font-size: 12px; color: var(--azul); background: none; border: 0; padding: 0; cursor: pointer; font-variant-numeric: tabular-nums; }
 .sub-etapa { border-top: 1px solid var(--linha); padding-top: 12px; display: flex; flex-direction: column; gap: 10px; }
 </style>
 </head>
@@ -200,6 +205,14 @@ select.sel { background: var(--painel-2); border: 1px solid var(--linha); border
     <!-- 3. DIREÇÃO -->
     <section class="etapa" id="et-direcao">
       <header><span class="num">3</span><h2>Direção</h2><span class="estado" id="est-direcao"></span></header>
+      <div class="analise">
+        <div class="linha-botoes">
+          <button class="btn principal" type="button" id="btn-autopreencher" disabled>Analisar e preencher a direção</button>
+          <button class="btn mini" type="button" id="btn-reanalisar" hidden>Analisar de novo</button>
+        </div>
+        <p class="dica" id="analise-status">A análise começa sozinha quando a transcrição terminar.</p>
+        <div class="analise-resumo" id="analise-resumo" hidden></div>
+      </div>
       <div class="grade-2">
         <div class="campo">
           <label for="sel-preset">Preset</label>
@@ -263,7 +276,7 @@ select.sel { background: var(--painel-2); border: 1px solid var(--linha); border
 
       <div class="sub-etapa">
         <p class="sub">Biblioteca de sons</p>
-        <p class="dica">Suba seus efeitos (risada, vine boom, "bruh"…). O nome do arquivo vira o nome do som, e o Claude passa a usá-lo por esse nome. Até uns 10 s cada.</p>
+        <p class="dica">Suba seus efeitos (risada, vine boom, "bruh"…) com um nome. O Claude passa a usá-los pelo nome. Até uns 10 s cada.</p>
         <div class="lista-lib" id="lista-sons"></div>
         <div class="linha-botoes">
           <button class="btn" type="button" id="btn-som">Adicionar som</button>
